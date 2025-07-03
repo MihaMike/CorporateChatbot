@@ -20,7 +20,6 @@ WELCOME_BUTTON = InlineKeyboardMarkup(
 )
 
 class GuestForm(StatesGroup):
-    full_name = State()
     is_foreign = State()
     citizenship = State()
     organization = State()
@@ -33,7 +32,7 @@ class GuestForm(StatesGroup):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await message.answer(
-        "Уважаемые Коллеги!\n\n"
+        "Уважаемые коллеги!\n\n"
         "Просим Вас заполнить форму для каждого приглашенного лица. "
         "Указанная информация будет использована исключительно в целях пропускного режима.",
         reply_markup=WELCOME_BUTTON
@@ -42,13 +41,13 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "start_form")
 async def process_start_form(call: types.CallbackQuery, state: FSMContext):
-    await call.message.answer("Пожалуйста, введите ФИО гостя:")
-    await state.set_state(GuestForm.full_name)
-    await call.answer()
-
-@dp.message(StateFilter(GuestForm.full_name))
-async def step_full_name(message: types.Message, state: FSMContext):
-    await state.update_data(full_name=message.text)
+    # Автоматически сохраняем ФИО, username и id пользователя
+    user = call.from_user
+    fio = user.full_name
+    username = user.username if user.username else "-"
+    user_id = user.id
+    await state.update_data(full_name=fio, tg_username=username, tg_id=user_id)
+    # Сразу переходим к следующему вопросу (иностранный гражданин)
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -57,25 +56,26 @@ async def step_full_name(message: types.Message, state: FSMContext):
             ]
         ]
     )
-    await message.answer("Гость — иностранный гражданин?", reply_markup=kb)
+    await call.message.answer("Вы — иностранный гражданин?", reply_markup=kb)
     await state.set_state(GuestForm.is_foreign)
+    await call.answer()
 
 @dp.callback_query(StateFilter(GuestForm.is_foreign))
 async def step_is_foreign(call: types.CallbackQuery, state: FSMContext):
     if call.data == "foreign_yes":
         await state.update_data(is_foreign="Да")
-        await call.message.answer("Укажите гражданство гостя:")
+        await call.message.answer("Укажите гражданство:")
         await state.set_state(GuestForm.citizenship)
     else:
         await state.update_data(is_foreign="Нет", citizenship="-")
-        await call.message.answer("Укажите организацию гостя и цель визита:")
+        await call.message.answer("Укажите организацию и цель визита:")
         await state.set_state(GuestForm.organization)
     await call.answer()
 
 @dp.message(StateFilter(GuestForm.citizenship))
 async def step_citizenship(message: types.Message, state: FSMContext):
     await state.update_data(citizenship=message.text)
-    await message.answer("Укажите организацию гостя и цель визита:")
+    await message.answer("Укажите организацию и цель визита:")
     await state.set_state(GuestForm.organization)
 
 @dp.message(StateFilter(GuestForm.organization))
@@ -103,7 +103,7 @@ async def step_time(message: types.Message, state: FSMContext):
         ]
     )
     await message.answer(
-        "Гостю необходима парковка для транспортного средства? (Количество парковочных мест строго ограничено (предоставляется в случае крайней необходимости, возможен отказ АЦ)",
+        "Гостю необходима парковка для транспортного средства? (Количество парковочных мест строго ограничено, возможен отказ АЦ)",
         reply_markup=kb
     )
     await state.set_state(GuestForm.need_parking)
@@ -116,7 +116,7 @@ async def step_parking(call: types.CallbackQuery, state: FSMContext):
         await call.message.answer("Пожалуйста, укажите госномер транспортного средства:")
         await state.set_state(GuestForm.car_plate)
     else:
-        await call.message.answer("✅ Спасибо! Пропуск оформлен.")
+        await call.message.answer("Спасибо! Пропуск оформлен.")
         await send_summary(call.message, state)
         await call.answer()
 
@@ -129,7 +129,7 @@ async def step_car_plate(message: types.Message, state: FSMContext):
 @dp.message(StateFilter(GuestForm.car_brand))
 async def step_car_brand(message: types.Message, state: FSMContext):
     await state.update_data(car_brand=message.text)
-    await message.answer("✅ Спасибо! Пропуск оформлен.")
+    await message.answer("Спасибо! Пропуск оформлен.")
     await send_summary(message, state)
 
 async def send_summary(message_or_call, state: FSMContext):
@@ -140,17 +140,24 @@ async def send_summary(message_or_call, state: FSMContext):
     if need_parking == "Нет":
         car_plate = car_brand = '-'
 
+    # Данные о том, кто заполнил
+    fio = data.get('full_name', '-')
+    tg_username = data.get('tg_username', '-')
+    tg_id = data.get('tg_id', '-')
+
     summary = (
-        "📝 Новый запрос на пропуск:\n\n"
-        f"👤 ФИО: {data.get('full_name','-')}\n"
-        f"🌎 Иностранец: {data.get('is_foreign','-')}\n"
-        f"🌍 Гражданство: {data.get('citizenship','-')}\n"
-        f"🏢 Организация/цель визита: {data.get('organization','-')}\n"
-        f"📅 Дата визита: {data.get('visit_date','-')}\n"
-        f"⏰ Время визита: {data.get('visit_time','-')}\n"
-        f"🚗 Парковка: {need_parking}\n"
-        f"🔢 Госномер ТС: {car_plate}\n"
-        f"🚘 Марка ТС: {car_brand}"
+        "Новый запрос на пропуск\n\n"
+        f"ФИО: {fio}\n"
+        f"Username: @{tg_username if tg_username != '-' else 'нет'}\n"
+        f"Telegram ID: {tg_id}\n"
+        f"Иностранец: {data.get('is_foreign','-')}\n"
+        f"Гражданство: {data.get('citizenship','-')}\n"
+        f"Организация/цель визита: {data.get('organization','-')}\n"
+        f"Дата визита: {data.get('visit_date','-')}\n"
+        f"Время визита: {data.get('visit_time','-')}\n"
+        f"Парковка: {need_parking}\n"
+        f"Госномер ТС: {car_plate}\n"
+        f"Марка ТС: {car_brand}"
     )
     await bot.send_message(chat_id=ADMIN_CHAT_ID, text=summary)
     await message_or_call.answer(
@@ -165,3 +172,4 @@ async def main():
 if __name__ == "__main__":
     print("start")
     asyncio.run(main())
+
